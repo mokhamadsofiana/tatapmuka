@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teknisi Mobile - Live 2 Arah (On-Demand)</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: #0f172a; color: white; margin: 0; padding: 15px;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 90vh;
+        }
+        h2 { color: #00d4ff; font-size: 18px; margin-bottom: 5px; text-transform: uppercase;}
+        p { color: #94a3b8; font-size: 12px; margin-top: 0; text-align: center; margin-bottom: 20px;}
+        
+        .video-container {
+            position: relative; width: 100%; max-width: 400px; aspect-ratio: 16/9;
+            background: #050b14; border-radius: 12px; overflow: hidden;
+            border: 2px solid #334155; margin-bottom: 20px; display: none;
+        }
+        #noc-video { width: 100%; height: 100%; object-fit: cover; }
+        #my-video {
+            position: absolute; bottom: 10px; right: 10px; width: 80px; height: 120px;
+            object-fit: cover; border-radius: 8px; border: 2px solid #00d4ff;
+            background: #000; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        
+        .badge-live {
+            position: absolute; top: 10px; left: 10px; background: #ff3366;
+            color: white; padding: 6px 10px; border-radius: 4px; font-size: 12px;
+            font-weight: bold; animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+        .control-panel {
+            background: #1e293b; padding: 25px; border-radius: 12px; width: 100%;
+            max-width: 360px; border: 1px solid rgba(0, 212, 255, 0.2); box-sizing: border-box;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center;
+        }
+        input { 
+            width: 100%; padding: 14px; border-radius: 8px; 
+            border: 1px solid #334155; background: #050b14; color: white; 
+            box-sizing: border-box; font-size: 16px; text-align: center;
+            text-transform: uppercase; letter-spacing: 2px; font-weight: bold;
+            margin-bottom: 15px;
+        }
+        input:focus { outline: none; border-color: #00d4ff; }
+        
+        button { 
+            background: #00d4ff; color: #050b14; border: none; padding: 16px; 
+            border-radius: 8px; font-weight: bold; width: 100%; cursor: pointer; 
+            font-size: 14px; transition: 0.3s;
+        }
+        button:disabled { background: #475569; color: #94a3b8; cursor: not-allowed;}
+        
+        .status-box {
+            margin-top: 15px; padding: 15px; border-radius: 8px; font-size: 12px; 
+            font-weight: bold; background: rgba(0,0,0,0.3); border: 1px solid #334155;
+        }
+        .text-blue { color: #00d4ff; } .text-green { color: #00ff88; } .text-red { color: #ff3366; }
+    </style>
+</head>
+<body>
+
+    <h2>Aplikasi Teknisi Lapangan</h2>
+    <p>Standby GPS & Tunggu Panggilan NOC</p>
+
+    <div class="video-container" id="videoContainer">
+        <video id="noc-video" autoplay playsinline></video>
+        <video id="my-video" autoplay muted playsinline></video>
+        <div class="badge-live">LIVE NOC (2-ARAH)</div>
+    </div>
+
+    <div class="control-panel" id="controlPanel">
+        <label style="font-size: 11px; color: #94a3b8; margin-bottom: 8px; display:block;">NOC PAIRING ID</label>
+        <input type="text" id="nocIdInput" placeholder="Contoh: NOC-1234">
+        
+        <button id="btnConnect" onclick="connectToNOC()">HUBUNGKAN & KIRIM GPS</button>
+        <div id="statusInfo" class="status-box text-blue">Status: Offline</div>
+    </div>
+
+    <script>
+        let peer = new Peer();
+        let myStream = null;
+        let gpsInterval = null;
+        let conn = null;
+        let techName = "";
+
+        const btn = document.getElementById('btnConnect');
+        const statusInfo = document.getElementById('statusInfo');
+        const videoContainer = document.getElementById('videoContainer');
+        const controlPanel = document.getElementById('controlPanel');
+
+        async function connectToNOC() {
+            const nocId = document.getElementById('nocIdInput').value.trim();
+            if (!nocId) {
+                updateStatus("Masukkan ID NOC Terlebih Dahulu!", "text-red"); return;
+            }
+
+            techName = prompt("Masukkan Nama Anda:", "Teknisi Banten");
+            if(!techName) return;
+
+            btn.innerText = "MENGHUBUNGKAN...";
+            btn.disabled = true;
+            updateStatus("Meminta akses kamera & microphone standby...", "text-blue");
+
+            try {
+                // Izin kamera & mic disiapkan sejak awal, agar NOC bisa memanggil kapan saja
+                myStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }, 
+                    audio: true
+                });
+                document.getElementById('my-video').srcObject = myStream;
+
+                // Membuka Data Connection (Hanya kirim Info & GPS)
+                conn = peer.connect(nocId);
+                
+                conn.on('open', () => {
+                    updateStatus(`TERHUBUNG! GPS Aktif.<br><br>Sistem Standby. Silakan tunggu NOC jika ingin memulai panggilan Video.`, "text-green");
+                    btn.innerText = "GPS & STANDBY AKTIF";
+                    btn.style.background = "#00ff88";
+                    
+                    conn.send({type: 'info', name: techName});
+                    mulaiKirimGPS();
+                });
+
+                conn.on('close', () => { resetUI("Koneksi NOC Terputus."); });
+
+            } catch (err) {
+                resetUI("Error: Kamera/Mic ditolak browser.");
+            }
+        }
+
+        // KETIKA NOC MEMANGGIL TIM LAPANGAN (ON DEMAND)
+        peer.on('call', call => {
+            if(!myStream) { updateStatus("Gagal menjawab, Kamera/Mic belum aktif.", "text-red"); return; }
+            
+            // Otomatis menjawab panggilan dengan stream lokal
+            call.answer(myStream);
+            
+            call.on('stream', nocStream => {
+                // Sembunyikan panel control, tampilkan Video Wall
+                controlPanel.style.display = "none";
+                videoContainer.style.display = "block";
+                
+                document.getElementById('noc-video').srcObject = nocStream;
+                updateStatus("Panggilan 2-Arah Sedang Berjalan...", "text-green");
+            });
+
+            call.on('close', () => {
+                // Kembali ke mode Standby GPS
+                controlPanel.style.display = "block";
+                videoContainer.style.display = "none";
+                document.getElementById('noc-video').srcObject = null;
+                updateStatus(`Panggilan diakhiri oleh NOC.<br><br>Sistem tetap Standby dan mengirim GPS.`, "text-green");
+            });
+        });
+
+        function mulaiKirimGPS() {
+            if (navigator.geolocation && conn) {
+                gpsInterval = setInterval(() => {
+                    if (conn.open) {
+                        navigator.geolocation.getCurrentPosition(pos => {
+                            conn.send({type: 'gps', lat: pos.coords.latitude, lng: pos.coords.longitude});
+                        });
+                    }
+                }, 5000); // Update lokasi setiap 5 detik
+            }
+        }
+
+        function updateStatus(msg, className) {
+            statusInfo.innerHTML = msg;
+            statusInfo.className = `status-box ${className}`;
+        }
+
+        function resetUI(msg) {
+            if (gpsInterval) clearInterval(gpsInterval);
+            if (myStream) myStream.getTracks().forEach(t => t.stop());
+            document.getElementById('noc-video').srcObject = null;
+            document.getElementById('my-video').srcObject = null;
+            btn.innerText = "HUBUNGKAN & KIRIM GPS";
+            btn.style.background = "#00d4ff";
+            btn.disabled = false;
+            updateStatus(msg, "text-red");
+        }
+    </script>
+</body>
+</html>
